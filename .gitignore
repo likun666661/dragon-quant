@@ -1,0 +1,17 @@
+# Binaries
+awesomeProject33
+dragon-quant
+
+# IDE
+.idea/
+
+# Reports and temporary data
+AI_Dragon_*.json
+AI_Hexagon_*.json
+AI_Tech_*.json
+DragonReport_*.html
+SniperReport_*.html
+DeepSeek_Fox_Report_*
+
+# OS
+.DS_Store
