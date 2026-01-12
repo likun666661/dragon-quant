@@ -38,13 +38,15 @@ type StockInfo struct {
 	DragonTag  string `json:"dragon_tag"`  // 龙头标识 (首板/连板/反包)
 
 	// --- 技术指标 ---
-	MA5       float64 `json:"ma5"`
-	MA20      float64 `json:"ma20"`
-	DIF       float64 `json:"dif"`
-	DEA       float64 `json:"dea"`
-	Macd      float64 `json:"macd"`
-	RSI6      float64 `json:"rsi6"`
-	TechNotes string  `json:"tech_notes"`
+	MA5         float64 `json:"ma5"`
+	MA20        float64 `json:"ma20"`
+	DIF         float64 `json:"dif"`
+	DEA         float64 `json:"dea"`
+	Macd        float64 `json:"macd"`
+	RSI6        float64 `json:"rsi6"`
+	TechNotes   string  `json:"tech_notes"`
+	Note30m     string  `json:"note_30m"`      // 30分钟级别分析
+	KLine30mStr string  `json:"kline_30m_str"` // 30m K线原始数据
 }
 
 type SectorInfo struct {
@@ -56,6 +58,7 @@ type SectorInfo struct {
 type KLineData struct {
 	Close  float64
 	Change float64
+	Amount float64 // 成交额
 }
 
 // --- API Response ---
@@ -107,6 +110,8 @@ type StockItem struct {
 	Habit        string // 🆕 股性
 	Status       string // 🔥 龙头地位 (2板/首板)
 	Tech         string
+	Note30m      string // 🆕 30m意图
+	KLine30mStr  string // 🆕 30m K线原始数据 (Prompt用)
 	Tags         string
 	Amplitude    string
 	IsLimitUp    bool

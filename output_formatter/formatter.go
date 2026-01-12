@@ -118,6 +118,7 @@ func GenFiles(allSectors []model.SectorInfo, stocks []*model.StockInfo, elapsed 
 					Habit:        s.DragonHabit,
 					Status:       s.DragonTag,
 					Tech:         s.TechNotes,
+					Note30m:      s.Note30m,
 					Tags:         strings.Join(otherTags, " "),
 					IsLimitUp:    s.ChangePct > 9.5,
 				})
@@ -274,6 +275,7 @@ td{padding:12px 10px;border-bottom:1px solid #21262d;vertical-align:top}
     <span class="sub-data">股性: {{.Habit}}</span>
     <span class="sub-data" style="color:#d2a8ff">{{.LHBStr}}</span>
     <span class="sub-data">{{.Tech}}</span>
+    <span class="sub-data" style="color:#a371f7">30m: {{.Note30m}}</span>
    </td>
   </tr>
   {{end}}
@@ -301,8 +303,8 @@ func PrintBanner() {
 
 func PrintDragonTable(stocks []*model.StockInfo) {
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "代码\t名称\t地位\t涨幅%\t真实竞价\t无论\t获利盘\t股性\t技术备注")
-	fmt.Fprintln(w, "----\t----\t----\t-----\t--------\t------\t------\t----\t--------")
+	fmt.Fprintln(w, "代码\t名称\t地位\t涨幅%\t真实竞价\t无论\t获利盘\t股性\t技术备注\t30m意图")
+	fmt.Fprintln(w, "----\t----\t----\t-----\t--------\t------\t------\t----\t--------\t-------")
 	for i, s := range stocks {
 		if i >= 30 {
 			break
@@ -327,8 +329,8 @@ func PrintDragonTable(stocks []*model.StockInfo) {
 			profitStr = ColorRed + profitStr + ColorReset
 		}
 
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			s.Code, s.Name, s.DragonTag, pctStr, callStr, lhbStr, profitStr, s.DragonHabit, s.TechNotes)
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			s.Code, s.Name, s.DragonTag, pctStr, callStr, lhbStr, profitStr, s.DragonHabit, s.TechNotes, s.Note30m)
 	}
 	w.Flush()
 }
@@ -340,4 +342,18 @@ func Contains(slice []string, item string) bool {
 		}
 	}
 	return false
+}
+
+func WriteMD(filename, content string) {
+	ioutil.WriteFile(filename, []byte(content), 0644)
+}
+
+func SimpleMDToHTMLFile(mdFile, htmlFile string) {
+	content, err := ioutil.ReadFile(mdFile)
+	if err != nil {
+		fmt.Printf("❌ Read MD Error: %v\n", err)
+		return
+	}
+	html := SimpleMDToHTML(string(content))
+	ioutil.WriteFile(htmlFile, []byte(html), 0644)
 }

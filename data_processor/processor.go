@@ -28,8 +28,13 @@ const (
 // FilterBasic checks basic stock properties like price, turnover, etc.
 // Returns true if the stock passes.
 func FilterBasic(stk model.StockInfo) bool {
-	// 排除科创板
-	if strings.HasPrefix(stk.Code, "688") {
+	// 排除科创板 (688), 创业板 (300, 301), 北交所 (4, 8, 92)
+	if strings.HasPrefix(stk.Code, "688") ||
+		strings.HasPrefix(stk.Code, "300") ||
+		strings.HasPrefix(stk.Code, "301") ||
+		strings.HasPrefix(stk.Code, "4") ||
+		strings.HasPrefix(stk.Code, "8") ||
+		strings.HasPrefix(stk.Code, "92") {
 		return false
 	}
 

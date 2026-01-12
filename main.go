@@ -8,7 +8,6 @@ import (
 	"dragon-quant/model"
 	"dragon-quant/output_formatter"
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -115,6 +114,31 @@ func main() {
 			kline5 := fetcher.Fetch5MinKline(s.Code)
 			s.OpenVolRatio = data_processor.CalculateSustainability(s.CallAuctionAmt, kline5)
 
+			// 🆕 30分钟级别主力意图 (从30m K线挖掘)
+			klines30m := fetcher.Fetch30MinKline(s.Code, 60)
+			s.Note30m = data_processor.Analyze30mStrategy(klines30m)
+
+			// 🆕 Format 30m K-lines for AI (Last 12 bars = 1.5 days)
+			var sb strings.Builder
+			count30m := len(klines30m)
+			startIdx := 0
+			if count30m > 12 {
+				startIdx = count30m - 12
+			}
+			for i := startIdx; i < count30m; i++ {
+				k := klines30m[i]
+				// 简化的K线描述: C=Close, V=Amount, R=Rate
+				rate := 0.0
+				if i > 0 {
+					prev := klines30m[i-1].Close
+					if prev > 0 {
+						rate = (k.Close - prev) / prev * 100
+					}
+				}
+				sb.WriteString(fmt.Sprintf("[Bar-%d: C=%.2f, R=%.2f%%, V=%.0f] ", i-startIdx+1, k.Close, rate, k.Amount))
+			}
+			s.KLine30mStr = sb.String()
+
 			// 🆕 4. 深度K线挖掘 (VWAP + 记忆)
 			s.VWAP, s.ProfitDev = data_processor.CalculateVWAP(klines, 30, s.Price)
 			s.DragonHabit = data_processor.AnalyzeDragonHabit(klines)
@@ -178,20 +202,77 @@ func main() {
 
 				if len(sectorStocks) > 0 {
 					reviewer := deepseek_reviewer.NewReviewer(apiKey)
-					// Call the new Sector-based Review
-					sectorResults := reviewer.ReviewBySector(sectorStocks)
 
-					// Generate Markdown Report
+					// Generate Markdown Report Base
 					reportFileMD := fmt.Sprintf("DeepSeek_Fox_Report_%s.md", fileTime)
 					reportFileHTML := fmt.Sprintf("DeepSeek_Fox_Report_%s.html", fileTime)
-
 					var mdBuffer strings.Builder
-
 					mdBuffer.WriteString("# 🦊 DeepSeek 老狐狸板块博弈报告\n")
 					mdBuffer.WriteString(fmt.Sprintf("**生成时间**: %s\n\n", timestamp))
-					mdBuffer.WriteString("> **战略**: 分板块弱肉强食，每个板块只选唯一真龙。\n\n")
+					mdBuffer.WriteString("> **战略**: 30m结构优先 -> 老狐狸博弈复审 -> 总决赛。\n\n")
 
-					// Iterate Sectors (Sorted Order?)
+					// 🆕 Step 6.1: 30分钟结构 AI 专项审视 (Pre-Filter)
+					fmt.Println("\n🧠 [Step 6.1] 启动 30分钟结构大师 (筛选 Top 3)...")
+					res30m := reviewer.ReviewBySector30m(sectorStocks)
+
+					// Filtered stocks for Old Fox (Only Top 3 from 30m)
+					foxInput := make(map[string][]*model.StockInfo)
+
+					if len(res30m) > 0 {
+						mdBuffer.WriteString("\n# 🛠️ 30分钟结构精选 (Top 3)\n")
+						mdBuffer.WriteString("> **逻辑**: 识别 N字反包、空中加油、双底等形态。\n\n")
+
+						// Sort sectors
+						var sectors30m []string
+						for s := range res30m {
+							sectors30m = append(sectors30m, s)
+						}
+						sort.Strings(sectors30m)
+
+						for _, secName := range sectors30m {
+							res := res30m[secName]
+							if len(res.Top3) == 0 {
+								continue
+							}
+							mdBuffer.WriteString(fmt.Sprintf("## %s\n", secName))
+							for _, t := range res.Top3 {
+								icon := "🔹"
+								if t.Rank == 1 {
+									icon = "🥇"
+								} else if t.Rank == 2 {
+									icon = "🥈"
+								} else if t.Rank == 3 {
+									icon = "🥉"
+								}
+
+								mdBuffer.WriteString(fmt.Sprintf("%s **%s** (%s) - %s\n", icon, t.StockName, t.StockCode, t.Metric))
+								mdBuffer.WriteString(fmt.Sprintf("> **分析**: %s\n", t.Reason))
+								mdBuffer.WriteString(fmt.Sprintf("> **推演**: %s\n\n", t.Deduction))
+
+								// Add to Fox Input
+								// Find the original stock info object
+								for _, original := range sectorStocks[secName] {
+									if original.Code == t.StockCode {
+										foxInput[secName] = append(foxInput[secName], original)
+										break
+									}
+								}
+							}
+							mdBuffer.WriteString("---\n")
+						}
+						fmt.Println("✅ 30分钟结构分析完成，MD已暂存。")
+					}
+
+					// Write intermediate report
+					output_formatter.WriteMD(reportFileMD, mdBuffer.String())
+
+					// 🆕 Step 6.2: Old Fox Review (Only on 30m Top 3)
+					fmt.Printf("\n🦊 [Step 6.2] 老狐狸博弈复审 (入围 %d 个板块)...\n", len(foxInput))
+					sectorResults := reviewer.ReviewBySector(foxInput)
+
+					mdBuffer.WriteString("\n# 🦊 老狐狸复审 & 板块王者\n")
+
+					// Iterate Sectors (Sorted)
 					var sectors []string
 					for s := range sectorResults {
 						sectors = append(sectors, s)
@@ -204,9 +285,7 @@ func main() {
 
 						// 1. Individual Reviews
 						mdBuffer.WriteString("### 个股辣评\n")
-						// Sort stocks in this sector for consistent order? (optional)
-						// Let's iterate the original list order to match insertion
-						for _, stock := range sectorStocks[secName] {
+						for _, stock := range foxInput[secName] {
 							if review, ok := res.StockReviews[stock.Code]; ok {
 								mdBuffer.WriteString(fmt.Sprintf("- **%s**: %s\n", stock.Name, review))
 							}
@@ -230,26 +309,18 @@ func main() {
 						mdBuffer.WriteString("---\n")
 					}
 
-					// Save MD
-					err := os.WriteFile(reportFileMD, []byte(mdBuffer.String()), 0644)
-					if err == nil {
-						fmt.Printf("\n✅ 老狐狸报告(MD)已生成: %s\n", reportFileMD)
-					} else {
-						fmt.Printf("❌ MD生成失败: %v\n", err)
-					}
+					// Update Report
+					output_formatter.WriteMD(reportFileMD, mdBuffer.String())
 
 					// --- Step 7: Grand Final (Top 5) ---
 					fmt.Println("\n🏆 [Step 7] 启动总决赛 (Top 5 巅峰对决)...")
+					// ... (Rest of Step 7 remains, but using sectorResults which is filtered)
 
-					// 1. Collect Candidates (Sector Winners)
+					// 1. Collect Candidates
 					var grandCandidates []*model.StockInfo
 					for _, r := range sectorResults {
 						if r.FinalPick != nil {
-							// Find the StockInfo object
-							// We don't have a direct map key for it easily, but we can browse sectorStocks
-							// Optimization: store *StockInfo in SectorResult?
-							// For now, loop sectorStocks[r.SectorName]
-							for _, s := range sectorStocks[r.SectorName] {
+							for _, s := range foxInput[r.SectorName] {
 								if s.Code == r.FinalPick.StockCode {
 									grandCandidates = append(grandCandidates, s)
 									break
@@ -258,15 +329,12 @@ func main() {
 						}
 					}
 
-					// 2. Run Review
+					// ... (Grand Final Logic)
 					if len(grandCandidates) > 0 {
 						gfRes := reviewer.ReviewGrandFinals(grandCandidates)
 						if gfRes != nil {
-							// Append to Report (Prepend or Append?)
-							// Let's Append a "Grand Final" chapter
-							var gfBuffer strings.Builder
-							gfBuffer.WriteString("\n\n# 🏆 总决赛：五虎上将 (Grand Final Top 5)\n")
-							gfBuffer.WriteString(fmt.Sprintf("> **市场情绪**: %s\n\n", gfRes.MarketSentiment))
+							mdBuffer.WriteString("\n\n# 🏆 总决赛：五虎上将 (Grand Final Top 5)\n")
+							mdBuffer.WriteString(fmt.Sprintf("> **市场情绪**: %s\n\n", gfRes.MarketSentiment))
 
 							for _, t := range gfRes.Top5 {
 								icon := "🎖️"
@@ -280,33 +348,20 @@ func main() {
 									icon = "⚔️ 前锋 (Vanguard)"
 								}
 
-								gfBuffer.WriteString(fmt.Sprintf("### %s: %s (%s)\n", icon, t.StockName, t.StockCode))
-								gfBuffer.WriteString(fmt.Sprintf("> %s\n\n", t.Reason))
+								mdBuffer.WriteString(fmt.Sprintf("### %s: %s (%s)\n", icon, t.StockName, t.StockCode))
+								mdBuffer.WriteString(fmt.Sprintf("> %s\n\n", t.Reason))
 							}
 
-							// Re-write file with appended content
-							// actually, better to just modify mdBuffer before writing file?
-							// But we already wrote it. Let's append.
-
-							f, err := os.OpenFile(reportFileMD, os.O_APPEND|os.O_WRONLY, 0644)
-							if err == nil {
-								f.WriteString(gfBuffer.String())
-								f.Close()
-								fmt.Println("✅ 总决赛名单已追加至报告。")
-
-								// Re-generate HTML with full content
-								fullContent, _ := os.ReadFile(reportFileMD)
-								htmlContent := output_formatter.SimpleMDToHTML(string(fullContent))
-								os.WriteFile(reportFileHTML, []byte(htmlContent), 0644)
-								fmt.Printf("✅ 老狐狸报告(HTML)已更新: %s\n", reportFileHTML)
-
-							}
+							output_formatter.WriteMD(reportFileMD, mdBuffer.String())
+							// Generate HTML
+							output_formatter.SimpleMDToHTMLFile(reportFileMD, reportFileHTML) // Assume Helper exist or implement inline
+							fmt.Printf("✅ 老狐狸报告(HTML)已更新: %s\n", reportFileHTML)
 						}
 					} else {
 						fmt.Println("🤷‍♂️ 没有产生任何板块龙头，取消总决赛。")
 					}
-				}
 
+				}
 			} else {
 				fmt.Println("\n⚠️ [Step 6] 未配置 DEEPSEEK_API_KEY，跳过 AI 点评。")
 			}

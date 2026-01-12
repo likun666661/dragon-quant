@@ -32,7 +32,8 @@ func FetchHistoryData(code string, limit int) []model.KLineData {
 		secID = "1." + code
 	}
 	// klt=101: 日线
-	url := fmt.Sprintf("http://push2his.eastmoney.com/api/qt/stock/kline/get?secid=%s&fields1=f1&fields2=f51,f53&klt=101&fqt=1&end=20500000&lmt=%d", secID, limit)
+	// fields2=f51,f53,f6 (Date, Close, Amount)
+	url := fmt.Sprintf("http://push2his.eastmoney.com/api/qt/stock/kline/get?secid=%s&fields1=f1&fields2=f51,f53,f6&klt=101&fqt=1&end=20500000&lmt=%d", secID, limit)
 
 	client := http.Client{Timeout: 3 * time.Second}
 	resp, err := client.Get(url)
@@ -51,12 +52,16 @@ func FetchHistoryData(code string, limit int) []model.KLineData {
 		parts := strings.Split(line, ",")
 		if len(parts) >= 2 {
 			p, _ := strconv.ParseFloat(parts[1], 64)
+			amt := 0.0
+			if len(parts) >= 3 {
+				amt, _ = strconv.ParseFloat(parts[2], 64)
+			}
 			change := 0.0
 			if i > 0 {
 				change = p - lastClose
 			}
 			lastClose = p
-			klines = append(klines, model.KLineData{Close: p, Change: change})
+			klines = append(klines, model.KLineData{Close: p, Change: change, Amount: amt})
 		}
 	}
 	return klines
@@ -111,7 +116,49 @@ func Fetch5MinKline(code string) []model.KLineData {
 		if len(parts) >= 2 {
 			// fields2=f51,f57 -> part[0]=Date, part[1]=Amount
 			amt, _ := strconv.ParseFloat(parts[1], 64)
-			klines = append(klines, model.KLineData{Close: 0, Change: amt}) // Hack: store Amount in Change field
+			klines = append(klines, model.KLineData{Close: 0, Change: 0, Amount: amt})
+		}
+	}
+	return klines
+}
+
+// 🆕 获取30分钟K线数据
+func Fetch30MinKline(code string, limit int) []model.KLineData {
+	secID := "0." + code
+	if strings.HasPrefix(code, "6") {
+		secID = "1." + code
+	}
+	// klt=30: 30分钟
+	// fields2=f51,f53,f57 (Date, Close, Amount)
+	url := fmt.Sprintf("http://push2his.eastmoney.com/api/qt/stock/kline/get?secid=%s&fields1=f1&fields2=f51,f53,f57&klt=30&fqt=1&end=20500000&lmt=%d", secID, limit)
+
+	client := http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+
+	body, _ := ioutil.ReadAll(resp.Body)
+	var kResp model.KLineResponse
+	json.Unmarshal(body, &kResp)
+
+	var klines []model.KLineData
+	lastClose := 0.0
+	for i, line := range kResp.Data.Klines {
+		parts := strings.Split(line, ",")
+		if len(parts) >= 2 {
+			p, _ := strconv.ParseFloat(parts[1], 64)
+			amt := 0.0
+			if len(parts) >= 3 {
+				amt, _ = strconv.ParseFloat(parts[2], 64)
+			}
+			change := 0.0
+			if i > 0 {
+				change = p - lastClose
+			}
+			lastClose = p
+			klines = append(klines, model.KLineData{Close: p, Change: change, Amount: amt})
 		}
 	}
 	return klines

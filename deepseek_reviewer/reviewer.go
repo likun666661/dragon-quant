@@ -1,8 +1,8 @@
 package deepseek_reviewer
 
 import (
-	"dragon-quant/model"
 	"bytes"
+	"dragon-quant/model"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
@@ -402,4 +402,162 @@ func truncate(s string, n int) string {
 		return string(r[:n]) + "..."
 	}
 	return s
+}
+
+// --- 30m Structure Analysis ---
+
+type Top3Result struct {
+	StockName string `json:"stock_name"`
+	StockCode string `json:"stock_code"`
+	Rank      int    `json:"rank"`
+	Metric    string `json:"metric"`
+	Reason    string `json:"reason"`
+	Deduction string `json:"next_move"` // 🆕 后续推演
+}
+
+type Sector30mResult struct {
+	SectorName string       `json:"sector_name"`
+	Top3       []Top3Result `json:"top_3"`
+}
+
+const Prompt30mSystem = `# Role: 短线技术形态大师 (30分钟级别专精)
+
+1. 核心任务
+我们将逐一审视板块内的股票。对于每一只股票，我会提供【基础数据】、【技术指标】和【30分钟K线序列】。
+请你对每只股票的 **30分钟结构** 进行简短点评 (Strong/Weak/Waiting)。
+**请务必记住那些结构惊艳的标的**。
+所有股票审视完后，我会要求你选出 Top 3。
+
+2. 分析核心 (30m K-line Structure)
+重点关注最近 12 根 30m K线 (约1.5个交易日) 的组合形态：
+* **N字反包:** 调整后迅速一根大阳线吃掉跌幅。
+* **空中加油:** 平台整理不破位，缩量后再次放量。
+* **圆弧底/双底:** 典型的底部吸筹形态。
+* **拒绝阴线:** 连续红盘，主力控盘极强。
+
+3. 数据格式说明
+* 数据: JSON 包含 涨跌幅, 换手, 量比, 资金流, MA, MACD, RSI 等。
+* 30m K线: [Bar-X: C=收盘价, R=涨幅%, V=成交额] (Bar-12 是最近的一根)
+`
+
+const Prompt30mSelect = `现在，基于我们刚才审视过的所有股票，请选出 **30分钟结构最强、主力意图最明显** 的 3 只股票。
+
+请仅返回一个标准的 JSON 对象，格式如下：
+{
+  "sector_name": "...",
+  "top_3": [
+    {
+      "rank": 1, 
+      "stock_name": "...", 
+      "stock_code": "...", 
+      "metric": "核心形态 (如: M20反包)", 
+      "reason": "详细分析: 30m结构具体好在哪里 (如: 连续小阳推升后缩量回调)", 
+      "next_move": "后续推演: 预判明天的走势 (如: 早盘若高开2%则确立主升浪)"
+    },
+    {"rank": 2, ...},
+    {"rank": 3, ...}
+  ]
+}
+`
+
+// ReviewBySector30m performs 30m K-line structure analysis and picks Top 3 per sector.
+func (r *Reviewer) ReviewBySector30m(sectorMap map[string][]*model.StockInfo) map[string]*Sector30mResult {
+	results := make(map[string]*Sector30mResult)
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	fmt.Printf("\n🧠 [DeepSeek-30m] 启动 30分钟结构 专项审视 (对话模式, %d 个板块)...\n", len(sectorMap))
+
+	for sectorName, stocks := range sectorMap {
+		wg.Add(1)
+		go func(name string, stockList []*model.StockInfo) {
+			defer wg.Done()
+
+			// 1. Init Chat Session
+			var history []Message
+			history = append(history, Message{Role: "system", Content: Prompt30mSystem})
+			history = append(history, Message{Role: "user", Content: fmt.Sprintf("你好，我是【%s】板块的交易员。我们开始吧。", name)})
+
+			// Warm up / Ack
+			resp := r.sendChat(history)
+			history = append(history, Message{Role: "assistant", Content: resp})
+
+			// 2. Loop Stocks (Conversational)
+			count := 0
+			for _, s := range stockList {
+				// User requested all, but let's be sanity safe against context limit if list is huge.
+				// DeepSeek has 32k context, can probably handle ~20-30 stocks easily.
+				// If sector has 100 stocks, it might crash. Let's cap at 20 strong candidates if needed?
+				// User said "all stocks". Let's try to follow.
+				// To save tokens/context, we format concisely.
+
+				if s.KLine30mStr == "" {
+					continue
+				}
+
+				// Construct Payload
+				// Include Tech Indicators as requested
+				techData := map[string]interface{}{
+					"Close":    s.Price,
+					"Change":   s.ChangePct,
+					"Turnover": s.Turnover,
+					"VolRatio": s.VolRatio,
+					"Inflow":   s.NetInflow,
+					"CallAmt":  s.CallAuctionAmt,
+					"MA20":     s.MA20,
+					"MACD":     s.Macd,
+					"RSI":      s.RSI6,
+					"Note":     s.TechNotes,
+				}
+				jsonBytes, _ := json.Marshal(techData)
+
+				msgContent := fmt.Sprintf("股票: %s (%s)\n技术面: %s\n30m K线: %s\n请分析结构。",
+					s.Name, s.Code, string(jsonBytes), s.KLine30mStr)
+
+				history = append(history, Message{Role: "user", Content: msgContent})
+
+				fmt.Printf("   ... [%s] 分析 %s ...\n", name, s.Name)
+				review := r.sendChat(history)
+				history = append(history, Message{Role: "assistant", Content: review})
+
+				count++
+				// Optional: Sleep slightly to avoid strict rate limits if needed?
+				// time.Sleep(100 * time.Millisecond)
+			}
+
+			if count == 0 {
+				return
+			}
+
+			// 3. Final Selection
+			fmt.Printf("🤔 [%s] 正在决出 Top 3 (已审视 %d 只)...\n", name, count)
+			history = append(history, Message{Role: "user", Content: Prompt30mSelect})
+
+			finalResp := r.sendChat(history)
+			if strings.HasPrefix(finalResp, "Error") || strings.HasPrefix(finalResp, "API Error") {
+				fmt.Printf("❌ [30m] %s Final Select API Error: %s\n", name, truncate(finalResp, 50))
+				return
+			}
+
+			// 4. Parse
+			cleaned := cleanJSONString(finalResp)
+			var res Sector30mResult
+			if err := json.Unmarshal([]byte(cleaned), &res); err == nil {
+				// Fix sector name if empty
+				if res.SectorName == "" {
+					res.SectorName = name
+				}
+				mu.Lock()
+				results[name] = &res
+				mu.Unlock()
+				fmt.Printf("✅ [30m] %s 审视完成，选出 %d 只.\n", name, len(res.Top3))
+			} else {
+				fmt.Printf("❌ [30m] JSON Error (%s): %v\n", name, err)
+			}
+
+		}(sectorName, stocks)
+	}
+
+	wg.Wait()
+	return results
 }
